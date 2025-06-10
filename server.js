@@ -207,13 +207,21 @@ app.get('/current-assignment', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/assignment', authenticateToken, async (req, res) => {
-  const { topic, is_group, group_members, email, submission } = req.body;
+app.post('/assignment', authenticateToken, upload.single('file'), async (req, res) => {
+  const { topic, is_group, group_members, email, link } = req.body;
 
-  if (!topic || !email || !submission)
+  if (!topic || !email || (!req.file && !link))
     return res.status(400).json({ error: 'Required fields missing' });
 
   try {
+    let submission = null;
+    if (req.file) {
+      // Upload file to Cloudinary
+      submission = await uploadImage(req.file);
+    } else if (link) {
+      submission = link;
+    }
+
     const [assignment] = await sql`
       INSERT INTO assignments (
         user_id, track, topic, date, time, is_group, group_members, email, submission
