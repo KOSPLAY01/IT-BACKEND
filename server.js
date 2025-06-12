@@ -241,16 +241,7 @@ app.post('/assignment', authenticateToken, upload.single('file'), async (req, re
 // --- CHECK-IN / OUT ---
 app.post('/checkin', authenticateToken, async (req, res) => {
   try {
-    // Check if already checked in today
-    const [existing] = await sql`
-      SELECT * FROM checkins
-      WHERE user_id = ${req.user.id} AND date = CURRENT_DATE;
-    `;
-
-    if (existing) {
-      return res.status(400).json({ error: 'You have already checked in today.' });
-    }
-
+    // Remove daily check: allow multiple check-ins per day
     const [checkin] = await sql`
       INSERT INTO checkins (
         user_id, name, track, date, checkin_time, status
@@ -269,10 +260,11 @@ app.post('/checkin', authenticateToken, async (req, res) => {
 
 app.post('/checkout', authenticateToken, async (req, res) => {
   try {
+    // Find the latest check-in without a checkout_time for this user (regardless of date)
     const [checkin] = await sql`
       SELECT * FROM checkins
-      WHERE user_id = ${req.user.id} AND date = CURRENT_DATE AND checkout_time IS NULL
-      ORDER BY checkin_time DESC LIMIT 1;
+      WHERE user_id = ${req.user.id} AND checkout_time IS NULL
+      ORDER BY date DESC, checkin_time DESC LIMIT 1;
     `;
 
     if (!checkin) {
