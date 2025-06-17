@@ -341,24 +341,34 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
 });
 
 //  Give assignment to a user or group
-app.post('/admin/assignments', authenticateToken, async (req, res) => {
+app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
-  const { track, topic, question, date, time, is_group, group_members, email } = req.body;
-  if (!topic) return res.status(400).json({ error: 'Required fields missing' });
+  const { user_id, track, date, is_group, time, group_members, topic, question_text, question_link } = req.body;
+  if (!user_id || !topic) return res.status(400).json({ error: 'Required fields missing' });
 
   try {
+    let question = null;
+    if (req.file) {
+      // If a file is uploaded, upload to Cloudinary
+      question = await uploadImage(req.file);
+    } else if (question_link) {
+      question = question_link;
+    } else if (question_text) {
+      question = question_text;
+    }
+
     const result = await sql`
-      INSERT INTO assignments ( track, topic, question, date, time, is_group, group_members, email)
+      INSERT INTO assignments (user_id, track, date, is_group, time, group_members, topic, question)
       VALUES (
+        ${user_id},
         ${track || null},
-        ${topic},
-        ${question || null},
         ${date || new Date().toISOString().slice(0, 10)},
-        ${time || new Date().toISOString().slice(11, 19)},
         ${is_group || false},
+        ${time || new Date().toISOString().slice(11, 19)},
         ${group_members || []},
-        ${email || null}
+        ${topic},
+        ${question}
       )
       RETURNING *;
     `;
