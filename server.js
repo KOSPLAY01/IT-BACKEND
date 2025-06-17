@@ -344,14 +344,13 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
 app.post('/admin/assignments', authenticateToken, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
-  const { user_id, track, topic, question, date, time, is_group, group_members, email } = req.body;
-  if (!user_id || !topic) return res.status(400).json({ error: 'Required fields missing' });
+  const { track, topic, question, date, time, is_group, group_members, email } = req.body;
+  if (!topic) return res.status(400).json({ error: 'Required fields missing' });
 
   try {
     const result = await sql`
-      INSERT INTO assignments (user_id, track, topic, question, date, time, is_group, group_members, email)
+      INSERT INTO assignments ( track, topic, question, date, time, is_group, group_members, email)
       VALUES (
-        ${user_id},
         ${track || null},
         ${topic},
         ${question || null},
