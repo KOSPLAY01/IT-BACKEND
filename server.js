@@ -261,11 +261,12 @@ app.post('/checkin', authenticateToken, async (req, res) => {
 
 app.post('/checkout', authenticateToken, async (req, res) => {
   try {
-    // Find the latest check-in without a checkout_time for this user (regardless of date)
+    // Find the latest check-in without a checkout_time for this user
     const [checkin] = await sql`
       SELECT * FROM checkins
       WHERE user_id = ${req.user.id} AND checkout_time IS NULL
-      ORDER BY date DESC, checkin_time DESC LIMIT 1;
+      ORDER BY date DESC, checkin_time DESC
+      LIMIT 1;
     `;
 
     if (!checkin) {
@@ -273,28 +274,33 @@ app.post('/checkout', authenticateToken, async (req, res) => {
     }
 
     const now = new Date();
-    const checkinTime = new Date(`1970-01-01T${checkin.checkin_time}Z`);
-    const durationMs = now - checkinTime;
 
-    const minutes = Math.floor(durationMs / 60000);
-    const hours = Math.floor(minutes / 60);
-    const readableDuration = `${hours}h ${minutes % 60}m`;
+    // Parse today's check-in time into a Date object
+    const [hours, minutes] = checkin.checkin_time.split(':').map(Number);
+    const checkinDate = new Date();
+    checkinDate.setUTCHours(hours, minutes, 0, 0); // assuming checkin_time is in UTC
+
+    const durationMs = now - checkinDate;
+    const durationMinutes = Math.floor(durationMs / 60000);
 
     const [checkout] = await sql`
       UPDATE checkins
       SET checkout_time = CURRENT_TIME,
-          duration = ${readableDuration},
+          duration = ${durationMinutes},
           status = 'checked-out'
       WHERE id = ${checkin.id}
       RETURNING *;
     `;
 
-    res.json({ checkout });
+    const readableDuration = `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`;
+
+    res.json({ checkout, readableDuration });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Checkout failed' });
   }
 });
+
 
 app.get('/checkin/history', authenticateToken, async (req, res) => {
   try {
