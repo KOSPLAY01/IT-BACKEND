@@ -208,6 +208,9 @@ app.get('/current-assignment', authenticateToken, async (req, res) => {
   }
 });
 
+
+
+// User submits assignment, validate allowed submission type
 app.post('/assignment', authenticateToken, upload.single('file'), async (req, res) => {
   const { topic, is_group, group_members, email, link } = req.body;
 
@@ -215,15 +218,37 @@ app.post('/assignment', authenticateToken, upload.single('file'), async (req, re
     return res.status(400).json({ error: 'Required fields missing' });
 
   try {
+    // Get the latest assignment for the user's track and topic
+    const [assignment] = await sql`
+      SELECT * FROM assignments WHERE track = ${req.user.track} AND topic = ${topic} ORDER BY date DESC, time DESC LIMIT 1;
+    `;
+    if (!assignment) return res.status(404).json({ error: 'Assignment not found for your track and topic' });
+
+    let allowedTypes = assignment.allowed_submission_types;
+    if (typeof allowedTypes === 'string') {
+      try { allowedTypes = JSON.parse(allowedTypes); } catch { allowedTypes = [allowedTypes]; }
+    }
+    if (!Array.isArray(allowedTypes)) allowedTypes = [];
+
+    // Validate submission type
+    if (req.file && !allowedTypes.includes('file')) {
+      return res.status(400).json({ error: 'File submission not allowed for this assignment' });
+    }
+    if (link && !allowedTypes.includes('link')) {
+      return res.status(400).json({ error: 'Link submission not allowed for this assignment' });
+    }
+    if (!req.file && !link) {
+      return res.status(400).json({ error: 'No submission provided' });
+    }
+
     let submission = null;
     if (req.file) {
-      // Upload file to Cloudinary
       submission = await uploadImage(req.file);
     } else if (link) {
       submission = link;
     }
 
-    const [assignment] = await sql`
+    const [submitted] = await sql`
       INSERT INTO assignments (
         user_id, track, topic, date, time, is_group, group_members, email, submission
       ) VALUES (
@@ -233,7 +258,7 @@ app.post('/assignment', authenticateToken, upload.single('file'), async (req, re
       RETURNING *;
     `;
 
-    res.status(201).json({ assignment });
+    res.status(201).json({ assignment: submitted });
   } catch (err) {
     res.status(500).json({ error: 'Assignment submission failed' });
   }
@@ -271,6 +296,11 @@ app.post('/checkout', authenticateToken, async (req, res) => {
 
     if (!checkin) {
       return res.status(400).json({ error: 'No active check-in found' });
+    }
+
+    // Only allow checkout if status is 'approved'
+    if (checkin.status !== 'approved') {
+      return res.status(400).json({ error: 'You cannot check out unless your check-in is approved.' });
     }
 
     const now = new Date();
@@ -351,7 +381,7 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
 app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
-  const { track, date, is_group, time, group_members, topic, question_text, question_link } = req.body;
+  const { track, date, is_group, time, group_members, topic, question_text, question_link, allowed_submission_types } = req.body;
   if (!track || !topic) return res.status(400).json({ error: 'Required fields missing' });
 
   try {
@@ -364,8 +394,14 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
       question = question_text;
     }
 
+    // allowed_submission_types should be an array or comma-separated string, e.g. ['file','link'] or 'file,link'
+    let allowedTypes = allowed_submission_types;
+    if (typeof allowedTypes === 'string') {
+      allowedTypes = allowedTypes.split(',').map(t => t.trim());
+    }
+
     const result = await sql`
-      INSERT INTO assignments (track, date, is_group, time, group_members, topic, question)
+      INSERT INTO assignments (track, date, is_group, time, group_members, topic, question, allowed_submission_types)
       VALUES (
         ${track},
         ${date || new Date().toISOString().slice(0, 10)},
@@ -373,7 +409,8 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
         ${time || new Date().toISOString().slice(11, 19)},
         ${group_members || []},
         ${topic},
-        ${question}
+        ${question},
+        ${JSON.stringify(allowedTypes)}
       )
       RETURNING *;
     `;
@@ -407,7 +444,7 @@ app.put('/admin/checkin/:id/status', authenticateToken, async (req, res) => {
     }
 
     const { status } = req.body;
-    const validStatuses = ['pending', 'checked-in', 'completed'];
+    const validStatuses = ['pending', 'approved', 'rejected'];
 
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status value' });
@@ -457,7 +494,7 @@ app.get('/admin/checkins', authenticateToken, async (req, res) => {
     }
 
     const { status } = req.query;
-    const validStatuses = ['pending', 'checked-in', 'checked-out'];
+    const validStatuses = ['pending', 'approved', 'rejected'];
 
     let checkins;
 
