@@ -201,7 +201,7 @@ app.get('/current-assignment', authenticateToken, async (req, res) => {
       LIMIT 1;
     `;
 
-    if (!assignment) return res.status(404).json({ message: 'No assignments found for your track' });
+    if (!assignment) return res.status(200).json({ message: 'No assignments found for your track' });
     res.json({ assignment });
   } catch (err) {
     res.status(500).json({ error: 'Failed to get assignment' });
