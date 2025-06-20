@@ -191,16 +191,17 @@ app.post('/auth/reset-password', async (req, res) => {
 
 // --- ASSIGNMENT ROUTES ---
 
+// Get current assignment for user based on track
 app.get('/current-assignment', authenticateToken, async (req, res) => {
   try {
     const [assignment] = await sql`
       SELECT * FROM assignments
-      WHERE user_id = ${req.user.id}
+      WHERE track = ${req.user.track}
       ORDER BY date DESC, time DESC
       LIMIT 1;
     `;
 
-    if (!assignment) return res.status(404).json({ message: 'No assignments found' });
+    if (!assignment) return res.status(404).json({ message: 'No assignments found for your track' });
     res.json({ assignment });
   } catch (err) {
     res.status(500).json({ error: 'Failed to get assignment' });
@@ -340,17 +341,16 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
   }
 });
 
-//  Give assignment to a user or group
+// Admin gives assignment to a track (not individual user)
 app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
-  const { user_id, track, date, is_group, time, group_members, topic, question_text, question_link } = req.body;
-  if (!user_id || !topic) return res.status(400).json({ error: 'Required fields missing' });
+  const { track, date, is_group, time, group_members, topic, question_text, question_link } = req.body;
+  if (!track || !topic) return res.status(400).json({ error: 'Required fields missing' });
 
   try {
     let question = null;
     if (req.file) {
-      // If a file is uploaded, upload to Cloudinary
       question = await uploadImage(req.file);
     } else if (question_link) {
       question = question_link;
@@ -359,10 +359,9 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
     }
 
     const result = await sql`
-      INSERT INTO assignments (user_id, track, date, is_group, time, group_members, topic, question)
+      INSERT INTO assignments (track, date, is_group, time, group_members, topic, question)
       VALUES (
-        ${user_id},
-        ${track || null},
+        ${track},
         ${date || new Date().toISOString().slice(0, 10)},
         ${is_group || false},
         ${time || new Date().toISOString().slice(11, 19)},
