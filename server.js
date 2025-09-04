@@ -382,7 +382,7 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
 app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
-  const { track, date, is_group, time, group_members, topic, question_text, question_link, allowed_submission_types } = req.body;
+  const { track, date, is_group, time, topic, question_text, question_link, allowed_submission_types } = req.body;
   if (!track || !topic) return res.status(400).json({ error: 'Required fields missing' });
 
   try {
@@ -402,13 +402,12 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
     }
 
     const result = await sql`
-      INSERT INTO assignments (track, date, is_group, time, group_members, topic, question, allowed_submission_types)
+      INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types)
       VALUES (
         ${track},
         ${date || new Date().toISOString().slice(0, 10)},
         ${is_group || false},
         ${time || new Date().toISOString().slice(11, 19)},
-        ${group_members || []},
         ${topic},
         ${question},
         ${JSON.stringify(allowedTypes)}
