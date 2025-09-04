@@ -344,12 +344,11 @@ app.get('/checkin/history', authenticateToken, async (req, res) => {
       let durationFormatted = null;
 
       if (entry.duration && typeof entry.duration === 'number') {
-        const minutes = Math.floor(entry.duration / 60000);
-        const hours = Math.floor(minutes / 60);
-        const mins = minutes % 60;
+        const hours = Math.floor(entry.duration / 60);
+        const mins = entry.duration % 60;
         durationFormatted = `${hours}h ${mins}m`;
       } else if (typeof entry.duration === 'string') {
-        durationFormatted = entry.duration;
+        durationFormatted = entry.duration; // Fallback if duration is already formatted as string
       }
 
       return { ...entry, durationFormatted };
@@ -361,6 +360,8 @@ app.get('/checkin/history', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch history' });
   }
 });
+
+
 
 
 // --- ADMIN ---
