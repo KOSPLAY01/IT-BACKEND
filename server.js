@@ -224,45 +224,51 @@ app.post("/auth/reset-password", async (req, res) => {
 // Get current assignment for user
 app.get("/current-assignment", authenticateToken, async (req, res) => {
   try {
-    console.log(
-      "Fetching assignment for:",
-      req.user.email,
-      "track:",
-      req.user.track
-    );
+    const userEmail = req.user.email?.toLowerCase();
+    const userTrack = req.user.track?.toLowerCase();
 
-    // First try: specific assignment for this email
+    // 1️⃣ Try to get assignment specific to this user
     let [assignment] = await sql`
       SELECT * FROM assignments
-      WHERE LOWER(email) = LOWER(${req.user.email})
-        AND LOWER(track) = LOWER(${req.user.track})
+      WHERE LOWER(email) = ${userEmail}
       ORDER BY date DESC, time DESC
       LIMIT 1;
     `;
 
-    // If none, fallback to track-wide
+    // 2️⃣ If none, get latest track-wide assignment
     if (!assignment) {
       [assignment] = await sql`
         SELECT * FROM assignments
-        WHERE email IS NULL
-          AND LOWER(track) = LOWER(${req.user.track})
+        WHERE email IS NULL AND LOWER(track) = ${userTrack}
         ORDER BY date DESC, time DESC
         LIMIT 1;
       `;
     }
 
     if (!assignment) {
-      return res
-        .status(200)
-        .json({ message: "No assignments found for your track" });
+      return res.status(200).json({ message: "No assignments found for you" });
     }
 
-    res.json({ assignment });
+    // Always parse question safely
+    let question = {};
+    try {
+      question = JSON.parse(assignment.question);
+    } catch {
+      question = assignment.question || {};
+    }
+
+    res.json({
+      assignment: {
+        ...assignment,
+        question, // normalized object {text, link, file}
+      },
+    });
   } catch (err) {
-    console.error("Current assignment error:", err);
+    console.error("Get current assignment error:", err);
     res.status(500).json({ error: "Failed to get assignment" });
   }
 });
+
 
 // User submits assignment (file or link). Uses user's email; no spoofing via body.
 app.post(
@@ -513,10 +519,11 @@ app.get("/admin/users", authenticateToken, async (req, res) => {
 app.post(
   "/admin/assignments",
   authenticateToken,
-  upload.single("question_file"),
+  upload.single("question_file"), // frontend must send file under this key
   async (req, res) => {
-    if (req.user.role !== "admin")
+    if (req.user.role !== "admin") {
       return res.status(403).json({ error: "Access denied" });
+    }
 
     const {
       track,
@@ -530,10 +537,12 @@ app.post(
       emails,
     } = req.body;
 
-    if (!track || !topic)
+    if (!track || !topic) {
       return res.status(400).json({ error: "Required fields missing" });
+    }
 
     try {
+      // Build question object dynamically
       let question = {};
 
       if (typeof question_text === "string" && question_text.trim()) {
@@ -542,126 +551,98 @@ app.post(
       if (typeof question_link === "string" && question_link.trim()) {
         question.link = question_link.trim();
       }
-      if (req.file && req.file.size > 0) {
+      if (req.file) {
         question.file = await uploadImage(req.file);
       }
 
       if (Object.keys(question).length === 0) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "Provide at least one of question_text, question_link, or file",
-          });
+        return res.status(400).json({
+          error: "Provide at least one of question_text, question_link, or file",
+        });
       }
 
-      // Normalize allowed types (store as JSON string if your column is TEXT)
+      // Normalize allowed submission types
       let allowedTypes = allowed_submission_types;
       if (typeof allowedTypes === "string") {
-        allowedTypes = allowedTypes
-          .split(",")
-          .map((t) => t.trim().toLowerCase());
+        allowedTypes = allowedTypes.split(",").map((t) => t.trim().toLowerCase());
       }
-      const normalizedAllowed = Array.isArray(allowedTypes) ? allowedTypes : [];
-      const allowedJson = JSON.stringify(normalizedAllowed);
+      const allowedJson = JSON.stringify(
+        Array.isArray(allowedTypes) ? allowedTypes : []
+      );
 
       const assignmentDate = date || new Date().toISOString().slice(0, 10);
       const assignmentTime = time || new Date().toISOString().slice(11, 19);
+      const groupFlag = is_group === "true" || is_group === true;
 
-      // If targeting specific emails
+      // ✅ Case 1: Assign to selected emails
       if (emails) {
-        const emailList = (
-          typeof emails === "string"
-            ? emails.split(",").map((e) => e.trim().toLowerCase())
-            : emails.map((e) => String(e).trim().toLowerCase())
-        ).filter(Boolean);
+        const emailList = (typeof emails === "string"
+          ? emails.split(",")
+          : emails
+        ).map((e) => e.trim().toLowerCase());
 
-        // OPTIONAL but recommended: ensure these emails exist & are in the track
-        const users = await sql`
-        SELECT email, track 
-        FROM users 
-        WHERE LOWER(email) = ANY(${emailList})
-      `;
-        const notFound = emailList.filter(
-          (e) => !users.find((u) => u.email?.toLowerCase() === e)
-        );
-        if (notFound.length) {
-          return res
-            .status(400)
-            .json({
-              error: `These emails do not exist: ${notFound.join(", ")}`,
-            });
-        }
-        const wrongTrack = users
-          .filter((u) => (u.track || "").toLowerCase() !== track.toLowerCase())
-          .map((u) => u.email);
-        if (wrongTrack.length) {
-          return res
-            .status(400)
-            .json({
-              error: `Not in track "${track}": ${wrongTrack.join(", ")}`,
-            });
-        }
-
-        // Insert one personal assignment per email (delete previous same topic if any)
         const inserted = [];
         for (const email of emailList) {
+          // remove any old assignment for same track+topic+email
           await sql`
-          DELETE FROM assignments 
-          WHERE LOWER(track) = LOWER(${track})
-            AND LOWER(topic) = LOWER(${topic})
-            AND LOWER(email) = LOWER(${email});
-        `;
+            DELETE FROM assignments 
+            WHERE LOWER(track) = LOWER(${track})
+              AND LOWER(topic) = LOWER(${topic})
+              AND LOWER(email) = LOWER(${email});
+          `;
 
           const [row] = await sql`
-          INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types, email)
-          VALUES (
-            ${track},
-            ${assignmentDate},
-            ${is_group || false},
-            ${assignmentTime},
-            ${topic},
-            ${JSON.stringify(question)},
-            ${allowedJson},
-            ${email}
-          )
-          RETURNING *;
-        `;
+            INSERT INTO assignments 
+              (track, date, is_group, time, topic, question, allowed_submission_types, email)
+            VALUES (
+              ${track},
+              ${assignmentDate},
+              ${groupFlag},
+              ${assignmentTime},
+              ${topic},
+              ${JSON.stringify(question)},
+              ${allowedJson},
+              ${email}
+            )
+            RETURNING *;
+          `;
           inserted.push(row);
         }
         return res.status(201).json({ assignments: inserted });
       }
 
-      // Else: track-wide assignment (email = NULL)
+      // ✅ Case 2: Assign to entire track (email = NULL)
       await sql`
-      DELETE FROM assignments 
-      WHERE email IS NULL 
-        AND LOWER(track) = LOWER(${track})
-        AND LOWER(topic) = LOWER(${topic});
-    `;
+        DELETE FROM assignments 
+        WHERE email IS NULL 
+          AND LOWER(track) = LOWER(${track})
+          AND LOWER(topic) = LOWER(${topic});
+      `;
 
       const [result] = await sql`
-      INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types, email)
-      VALUES (
-        ${track},
-        ${assignmentDate},
-        ${is_group || false},
-        ${assignmentTime},
-        ${topic},
-        ${JSON.stringify(question)},
-        ${allowedJson},
-        NULL
-      )
-      RETURNING *;
-    `;
+        INSERT INTO assignments 
+          (track, date, is_group, time, topic, question, allowed_submission_types, email)
+        VALUES (
+          ${track},
+          ${assignmentDate},
+          ${groupFlag},
+          ${assignmentTime},
+          ${topic},
+          ${JSON.stringify(question)},
+          ${allowedJson},
+          NULL
+        )
+        RETURNING *;
+      `;
 
-      res.status(201).json({ assignment: result });
+      return res.status(201).json({ assignment: result });
     } catch (err) {
       console.error("Admin create assignment error:", err);
       res.status(500).json({ error: "Failed to create assignment" });
     }
   }
 );
+
 
 // GET /admin/assignments – Admin sees all assignments
 app.get("/admin/assignments", authenticateToken, async (req, res) => {
