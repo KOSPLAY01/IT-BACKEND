@@ -402,9 +402,9 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
     // Accept all: question_text, question_link, file (image/pdf)
     let question = {};
 
-    if (question_text) question.text = question_text || null;
-    if (question_link) question.link = question_link || null;
-    if (req.file) question.file = await uploadImage(req.file) || null;
+    if (question_text) question.text = question_text || "";
+    if (question_link) question.link = question_link || "";
+    if (req.file) question.file = await uploadImage(req.file) || "";
 
     // If nothing provided, error
     if (!question.text && !question.link && !question.file) {
