@@ -376,7 +376,15 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
   try {
-    const users = await sql`SELECT * FROM users ORDER BY created_at DESC;`;
+    const { track } = req.query;
+    let users;
+
+    if (track) {
+      users = await sql`SELECT * FROM users WHERE LOWER(track) = LOWER(${track}) ORDER BY created_at DESC;`;
+    } else {
+      users = await sql`SELECT * FROM users ORDER BY created_at DESC;`;
+    }
+
     res.json({ users });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch users' });
