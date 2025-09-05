@@ -395,39 +395,78 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
 app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
-  const { track, date, is_group, time, topic, question_text, question_link, allowed_submission_types } = req.body;
+  const { track, date, is_group, time, topic, question_text, question_link, allowed_submission_types, emails } = req.body;
   if (!track || !topic) return res.status(400).json({ error: 'Required fields missing' });
 
   try {
-    let question = null;
-    if (req.file) {
-      question = await uploadImage(req.file);
-    } else if (question_link) {
-      question = question_link;
-    } else if (question_text) {
-      question = question_text;
+    // Accept all: question_text, question_link, file (image/pdf)
+    let question = {};
+
+    if (question_text) question.text = question_text;
+    if (question_link) question.link = question_link;
+    if (req.file) question.file = await uploadImage(req.file);
+
+    // If nothing provided, error
+    if (!question.text && !question.link && !question.file) {
+      return res.status(400).json({ error: 'Provide at least one of question_text, question_link, or file' });
     }
 
-    // allowed_submission_types should be an array or comma-separated string, e.g. ['file','link'] or 'file,link'
+    // allowed_submission_types should be an array or comma-separated string
     let allowedTypes = allowed_submission_types;
     if (typeof allowedTypes === 'string') {
       allowedTypes = allowedTypes.split(',').map(t => t.trim());
     }
 
-    const result = await sql`
-      INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types)
-      VALUES (
-        ${track},
-        ${date || new Date().toISOString().slice(0, 10)},
-        ${is_group || false},
-        ${time || new Date().toISOString().slice(11, 19)},
-        ${topic},
-        ${question},
-        ${JSON.stringify(allowedTypes)}
-      )
-      RETURNING *;
-    `;
-    res.status(201).json({ assignment: result[0] });
+    // If emails provided, assign to specific users in the track
+    if (emails) {
+      let emailList = emails;
+      if (typeof emails === 'string') {
+        emailList = emails.split(',').map(e => e.trim());
+      }
+      // Get users in track with those emails
+      const users = await sql`
+        SELECT id FROM users WHERE LOWER(track) = LOWER(${track}) AND email = ANY(${emailList})
+      `;
+      if (!users.length) {
+        return res.status(400).json({ error: 'No users found for provided emails in this track' });
+      }
+      // Insert assignment for each user
+      const inserted = [];
+      for (const user of users) {
+        const [result] = await sql`
+          INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types, user_id)
+          VALUES (
+            ${track},
+            ${date || new Date().toISOString().slice(0, 10)},
+            ${is_group || false},
+            ${time || new Date().toISOString().slice(11, 19)},
+            ${topic},
+            ${JSON.stringify(question)},
+            ${JSON.stringify(allowedTypes)},
+            ${user.id}
+          )
+          RETURNING *;
+        `;
+        inserted.push(result);
+      }
+      return res.status(201).json({ assignments: inserted });
+    } else {
+      // Assign to all users in the track (no user_id, or user_id = null)
+      const result = await sql`
+        INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types)
+        VALUES (
+          ${track},
+          ${date || new Date().toISOString().slice(0, 10)},
+          ${is_group || false},
+          ${time || new Date().toISOString().slice(11, 19)},
+          ${topic},
+          ${JSON.stringify(question)},
+          ${JSON.stringify(allowedTypes)}
+        )
+        RETURNING *;
+      `;
+      return res.status(201).json({ assignment: result[0] });
+    }
   } catch (err) {
     console.error('Admin create assignment error:', err);   
     res.status(500).json({ error: 'Failed to create assignment' });
