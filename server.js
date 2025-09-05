@@ -411,6 +411,11 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
       return res.status(400).json({ error: 'Provide at least one of question_text, question_link, or file' });
     }
 
+    // Ensure only the provided fields are set in question object
+    Object.keys(question).forEach(key => {
+      if (!question[key]) delete question[key];
+    });
+
     // allowed_submission_types should be an array or comma-separated string
     let allowedTypes = allowed_submission_types;
     if (typeof allowedTypes === 'string') {
@@ -433,6 +438,8 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
       // Insert assignment for each user
       const inserted = [];
       for (const user of users) {
+        // Always create a fresh question object for each user to avoid mutation issues
+        const userQuestion = { ...question };
         const [result] = await sql`
           INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types, user_id)
           VALUES (
@@ -441,7 +448,7 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
             ${is_group || false},
             ${time || new Date().toISOString().slice(11, 19)},
             ${topic},
-            ${JSON.stringify(question)},
+            ${JSON.stringify(userQuestion)},
             ${JSON.stringify(allowedTypes)},
             ${user.id}
           )
