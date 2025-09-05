@@ -429,8 +429,10 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
         emailList = emails.split(',').map(e => e.trim());
       }
       // Get users in track with those emails
+      // normalize emails to lowercase for case-insensitive match
+      const normalizedEmails = emailList.map(e => e.toLowerCase());
       const users = await sql`
-        SELECT id FROM users WHERE LOWER(track) = LOWER(${track}) AND email = ANY(${emailList})
+        SELECT id, email FROM users WHERE LOWER(track) = LOWER(${track}) AND LOWER(email) = ANY(${normalizedEmails})
       `;
       if (!users.length) {
         return res.status(400).json({ error: 'No users found for provided emails in this track' });
@@ -438,8 +440,17 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
       // Insert assignment for each user
       const inserted = [];
       for (const user of users) {
+        // Remove any existing assignment for this user with same track+topic to avoid retaining old fields/files
+        await sql`
+          DELETE FROM assignments WHERE user_id = ${user.id} AND LOWER(track) = LOWER(${track}) AND topic = ${topic};
+        `;
+
         // Always create a fresh question object for each user to avoid mutation issues
         const userQuestion = { ...question };
+
+        // Ensure allowedTypes is an array (fallback to empty array)
+        const normalizedAllowed = Array.isArray(allowedTypes) ? allowedTypes : (allowedTypes ? [allowedTypes] : []);
+
         const [result] = await sql`
           INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types, user_id)
           VALUES (
@@ -449,7 +460,7 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
             ${time || new Date().toISOString().slice(11, 19)},
             ${topic},
             ${JSON.stringify(userQuestion)},
-            ${JSON.stringify(allowedTypes)},
+            ${JSON.stringify(normalizedAllowed)},
             ${user.id}
           )
           RETURNING *;
@@ -459,6 +470,13 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
       return res.status(201).json({ assignments: inserted });
     } else {
       // Assign to all users in the track (no user_id, or user_id = null)
+      // When assigning to whole track, delete any existing assignment for same track+topic created without user_id
+      await sql`
+        DELETE FROM assignments WHERE user_id IS NULL AND LOWER(track) = LOWER(${track}) AND topic = ${topic};
+      `;
+
+      const normalizedAllowed = Array.isArray(allowedTypes) ? allowedTypes : (allowedTypes ? [allowedTypes] : []);
+
       const result = await sql`
         INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types)
         VALUES (
@@ -468,7 +486,7 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
           ${time || new Date().toISOString().slice(11, 19)},
           ${topic},
           ${JSON.stringify(question)},
-          ${JSON.stringify(allowedTypes)}
+          ${JSON.stringify(normalizedAllowed)}
         )
         RETURNING *;
       `;
