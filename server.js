@@ -1,14 +1,14 @@
 // server.js
-import express from 'express';
-import multer from 'multer';
-import cors from 'cors';
-import { neon } from '@neondatabase/serverless';
-import jwt from 'jsonwebtoken';
-import bcrypt from 'bcrypt';
-import { v2 as cloudinary } from 'cloudinary';
-import dotenv from 'dotenv';
-import fs from 'fs';
-import nodemailer from 'nodemailer';
+import express from "express";
+import multer from "multer";
+import cors from "cors";
+import { neon } from "@neondatabase/serverless";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcrypt";
+import { v2 as cloudinary } from "cloudinary";
+import dotenv from "dotenv";
+import fs from "fs";
+import nodemailer from "nodemailer";
 
 dotenv.config();
 
@@ -25,10 +25,10 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const upload = multer({ dest: '/tmp' });
+const upload = multer({ dest: "/tmp" });
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  service: "gmail",
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
@@ -42,21 +42,21 @@ const generateToken = (user) =>
       email: user.email,
       name: user.name,
       role: user.role,
-      track: user.track
+      track: user.track,
     },
     process.env.JWT_SECRET,
-    { expiresIn: '7d' }
+    { expiresIn: "7d" }
   );
 
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  if (!authHeader) return res.status(401).json({ error: 'Missing auth token' });
+  const authHeader = req.headers["authorization"];
+  if (!authHeader) return res.status(401).json({ error: "Missing auth token" });
 
-  const token = authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Invalid auth token' });
+  const token = authHeader.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Invalid auth token" });
 
   jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Token invalid or expired' });
+    if (err) return res.status(403).json({ error: "Token invalid or expired" });
     req.user = user;
     next();
   });
@@ -64,28 +64,41 @@ const authenticateToken = (req, res, next) => {
 
 const uploadImage = async (file) => {
   if (!file) return null;
-  const result = await cloudinary.uploader.upload(file.path, { folder: 'guru_it' });
+  const result = await cloudinary.uploader.upload(file.path, {
+    folder: "guru_it",
+  });
   fs.unlinkSync(file.path);
   return result.secure_url;
 };
 
-app.get('/', (req, res) => {
-  res.send('Welcome to Guru IT Website');
+app.get("/", (req, res) => {
+  res.send("Welcome to Guru IT Website");
 });
 
 // --- AUTH ROUTES ---
 
-app.post('/register', upload.single('image'), async (req, res) => {
-  const { email, password, name, reg_no, level, school, department, track, role = 'user' } = req.body;
-  if (!email || !password || !name) return res.status(400).json({ error: 'All fields are required' });
+app.post("/register", upload.single("image"), async (req, res) => {
+  const {
+    email,
+    password,
+    name,
+    reg_no,
+    level,
+    school,
+    department,
+    track,
+    role = "user",
+  } = req.body;
+  if (!email || !password || !name)
+    return res.status(400).json({ error: "All fields are required" });
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const imageUrl = req.file ? await uploadImage(req.file) : null;
 
     const [existing] = await sql`SELECT * FROM users WHERE email = ${email}`;
-    if (existing) return res.status(400).json({ error: 'Email already in use' });
-
+    if (existing)
+      return res.status(400).json({ error: "Email already in use" });
 
     const [user] = await sql`
       INSERT INTO users (email, password, name, profile_image_url, reg_no, level, school, department, track, role)
@@ -93,21 +106,26 @@ app.post('/register', upload.single('image'), async (req, res) => {
       RETURNING *;
     `;
     const token = generateToken(user);
-    res.status(201).json({ message: 'User registered successfully',token, user});
+    res
+      .status(201)
+      .json({ message: "User registered successfully", token, user });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/auth/login', async (req, res) => {
+app.post("/auth/login", async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const [user] = await sql`SELECT * FROM users WHERE email = ${email} LIMIT 1`;
-    if (!user) return res.status(400).json({ error: 'Invalid email or password' });
+    const [user] =
+      await sql`SELECT * FROM users WHERE email = ${email} LIMIT 1`;
+    if (!user)
+      return res.status(400).json({ error: "Invalid email or password" });
 
     const valid = await bcrypt.compare(password, user.password);
-    if (!valid) return res.status(400).json({ error: 'Invalid email or password' });
+    if (!valid)
+      return res.status(400).json({ error: "Invalid email or password" });
 
     const token = generateToken(user);
     res.json({ token, user });
@@ -116,10 +134,10 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
-app.get('/auth/profile', authenticateToken, async (req, res) => {
+app.get("/auth/profile", authenticateToken, async (req, res) => {
   try {
     const [user] = await sql`SELECT * FROM users WHERE id = ${req.user.id}`;
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user) return res.status(404).json({ error: "User not found" });
 
     res.json(user);
   } catch (err) {
@@ -127,74 +145,91 @@ app.get('/auth/profile', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/auth/profile', authenticateToken, upload.single('image'), async (req, res) => {
-  const { email, name, reg_no, level, school, department } = req.body;
+app.put(
+  "/auth/profile",
+  authenticateToken,
+  upload.single("image"),
+  async (req, res) => {
+    const { email, name, reg_no, level, school, department } = req.body;
 
-  try {
-    const updates = { email, name, reg_no, level, school, department };
-    if (req.file) updates.profile_image_url = await uploadImage(req.file);
+    try {
+      const updates = { email, name, reg_no, level, school, department };
+      if (req.file) updates.profile_image_url = await uploadImage(req.file);
 
-    const fields = Object.keys(updates).filter((k) => updates[k] !== undefined);
-    const values = fields.map((k) => updates[k]);
-    const setClause = fields.map((k, i) => `${k} = $${i + 1}`).join(', ');
-    const query = `UPDATE users SET ${setClause} WHERE id = $${fields.length + 1} RETURNING *`;
+      const fields = Object.keys(updates).filter(
+        (k) => updates[k] !== undefined
+      );
+      const values = fields.map((k) => updates[k]);
+      const setClause = fields.map((k, i) => `${k} = $${i + 1}`).join(", ");
+      const query = `UPDATE users SET ${setClause} WHERE id = $${
+        fields.length + 1
+      } RETURNING *`;
 
-    const [updatedUser] = await sql.unsafe(query, [...values, req.user.id]);
+      const [updatedUser] = await sql.unsafe(query, [...values, req.user.id]);
 
-    res.json(updatedUser);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+      res.json(updatedUser);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   }
-});
+);
 
-app.post('/auth/forgot-password', async (req, res) => {
+app.post("/auth/forgot-password", async (req, res) => {
   const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email is required' });
+  if (!email) return res.status(400).json({ error: "Email is required" });
 
   try {
     const [user] = await sql`SELECT * FROM users WHERE email = ${email}`;
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user) return res.status(404).json({ error: "User not found" });
 
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '15m' });
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "15m",
+    });
     const resetUrl = `http://localhost:5173/reset-password?token=${token}`;
 
     await transporter.sendMail({
       from: `"GURU IT" <${process.env.EMAIL_USER}>`,
       to: email,
-      subject: 'Password Reset Request',
+      subject: "Password Reset Request",
       html: `<p>Click to reset your password:</p><a href="${resetUrl}">${resetUrl}</a><p>Expires in 15 minutes.</p>`,
     });
 
-    res.json({ message: 'Reset email sent if account exists.' });
+    res.json({ message: "Reset email sent if account exists." });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to send reset email' });
+    res.status(500).json({ error: "Failed to send reset email" });
   }
 });
 
-app.post('/auth/reset-password', async (req, res) => {
+app.post("/auth/reset-password", async (req, res) => {
   const { token, newPassword } = req.body;
-  if (!token || !newPassword) return res.status(400).json({ error: 'Token and password required' });
+  if (!token || !newPassword)
+    return res.status(400).json({ error: "Token and password required" });
 
   try {
     const { userId } = jwt.verify(token, process.env.JWT_SECRET);
     const [user] = await sql`SELECT * FROM users WHERE id = ${userId}`;
-    if (!user) return res.status(400).json({ error: 'User not found' });
+    if (!user) return res.status(400).json({ error: "User not found" });
 
     const hashed = await bcrypt.hash(newPassword, 10);
     await sql`UPDATE users SET password = ${hashed} WHERE id = ${userId}`;
 
-    res.json({ message: 'Password reset successful' });
+    res.json({ message: "Password reset successful" });
   } catch (err) {
-    res.status(400).json({ error: 'Invalid or expired token' });
+    res.status(400).json({ error: "Invalid or expired token" });
   }
 });
 
 // --- ASSIGNMENT ROUTES ---
 
 // Get current assignment for user
-app.get('/current-assignment', authenticateToken, async (req, res) => {
+app.get("/current-assignment", authenticateToken, async (req, res) => {
   try {
-    console.log("Fetching assignment for:", req.user.email, "track:", req.user.track);
+    console.log(
+      "Fetching assignment for:",
+      req.user.email,
+      "track:",
+      req.user.track
+    );
 
     // First try: specific assignment for this email
     let [assignment] = await sql`
@@ -217,30 +252,35 @@ app.get('/current-assignment', authenticateToken, async (req, res) => {
     }
 
     if (!assignment) {
-      return res.status(200).json({ message: 'No assignments found for your track' });
+      return res
+        .status(200)
+        .json({ message: "No assignments found for your track" });
     }
 
     res.json({ assignment });
   } catch (err) {
     console.error("Current assignment error:", err);
-    res.status(500).json({ error: 'Failed to get assignment' });
+    res.status(500).json({ error: "Failed to get assignment" });
   }
 });
 
-
-
 // User submits assignment (file or link). Uses user's email; no spoofing via body.
-app.post('/assignment', authenticateToken, upload.single('file'), async (req, res) => {
-  const { topic, is_group, group_members, link } = req.body;
-  const userEmail = req.user.email;
-  const userTrack = req.user.track;
+app.post(
+  "/assignment",
+  authenticateToken,
+  upload.single("file"),
+  async (req, res) => {
+    const { topic, is_group, group_members, link } = req.body;
+    const userEmail = req.user.email;
+    const userTrack = req.user.track;
 
-  if (!topic) return res.status(400).json({ error: 'Topic is required' });
-  if (!req.file && !link) return res.status(400).json({ error: 'Provide a file or a link' });
+    if (!topic) return res.status(400).json({ error: "Topic is required" });
+    if (!req.file && !link)
+      return res.status(400).json({ error: "Provide a file or a link" });
 
-  try {
-    // 1) Try personal assignment
-    let [base] = await sql`
+    try {
+      // 1) Try personal assignment
+      let [base] = await sql`
       SELECT * FROM assignments
       WHERE LOWER(email) = LOWER(${userEmail})
         AND LOWER(track) = LOWER(${userTrack})
@@ -249,9 +289,9 @@ app.post('/assignment', authenticateToken, upload.single('file'), async (req, re
       LIMIT 1;
     `;
 
-    // 2) Else try track-wide
-    if (!base) {
-      [base] = await sql`
+      // 2) Else try track-wide
+      if (!base) {
+        [base] = await sql`
         SELECT * FROM assignments
         WHERE email IS NULL
           AND LOWER(track) = LOWER(${userTrack})
@@ -259,38 +299,49 @@ app.post('/assignment', authenticateToken, upload.single('file'), async (req, re
         ORDER BY date DESC, time DESC
         LIMIT 1;
       `;
-    }
+      }
 
-    if (!base) return res.status(404).json({ error: 'Assignment not found for your track and topic' });
+      if (!base)
+        return res
+          .status(404)
+          .json({ error: "Assignment not found for your track and topic" });
 
-    // 3) Parse allowed types
-    let allowed = base.allowed_submission_types;
-    if (typeof allowed === 'string') {
-      try { allowed = JSON.parse(allowed); } catch { allowed = [allowed]; }
-    }
-    if (!Array.isArray(allowed)) allowed = [];
-    allowed = allowed.map(x => String(x).toLowerCase());
+      // 3) Parse allowed types
+      let allowed = base.allowed_submission_types;
+      if (typeof allowed === "string") {
+        try {
+          allowed = JSON.parse(allowed);
+        } catch {
+          allowed = [allowed];
+        }
+      }
+      if (!Array.isArray(allowed)) allowed = [];
+      allowed = allowed.map((x) => String(x).toLowerCase());
 
-    // 4) Validate type
-    if (req.file && !allowed.includes('file')) {
-      return res.status(400).json({ error: 'File submission not allowed for this assignment' });
-    }
-    if (link && !allowed.includes('link')) {
-      return res.status(400).json({ error: 'Link submission not allowed for this assignment' });
-    }
+      // 4) Validate type
+      if (req.file && !allowed.includes("file")) {
+        return res
+          .status(400)
+          .json({ error: "File submission not allowed for this assignment" });
+      }
+      if (link && !allowed.includes("link")) {
+        return res
+          .status(400)
+          .json({ error: "Link submission not allowed for this assignment" });
+      }
 
-    // 5) Upload or accept link
-    let submission = null;
-    if (req.file && req.file.size > 0) {
-      submission = await uploadImage(req.file);
-    } else if (link) {
-      submission = String(link).trim();
-    }
+      // 5) Upload or accept link
+      let submission = null;
+      if (req.file && req.file.size > 0) {
+        submission = await uploadImage(req.file);
+      } else if (link) {
+        submission = String(link).trim();
+      }
 
-    // 6) If personal exists -> UPDATE; else CLONE track-wide -> INSERT personal with submission
-    if (base.email) {
-      // Personal exists → update it
-      const [updated] = await sql`
+      // 6) If personal exists -> UPDATE; else CLONE track-wide -> INSERT personal with submission
+      if (base.email) {
+        // Personal exists → update it
+        const [updated] = await sql`
         UPDATE assignments
         SET submission = ${submission},
             is_group = ${is_group || false},
@@ -299,10 +350,10 @@ app.post('/assignment', authenticateToken, upload.single('file'), async (req, re
         WHERE id = ${base.id}
         RETURNING *;
       `;
-      return res.status(201).json({ assignment: updated });
-    } else {
-      // Track-wide → clone into a personal row and attach submission
-      const [cloned] = await sql`
+        return res.status(201).json({ assignment: updated });
+      } else {
+        // Track-wide → clone into a personal row and attach submission
+        const [cloned] = await sql`
         INSERT INTO assignments (
           track, topic, date, time, is_group, group_members, question,
           allowed_submission_types, email, submission, created_at, updated_at
@@ -323,17 +374,17 @@ app.post('/assignment', authenticateToken, upload.single('file'), async (req, re
         )
         RETURNING *;
       `;
-      return res.status(201).json({ assignment: cloned });
+        return res.status(201).json({ assignment: cloned });
+      }
+    } catch (err) {
+      console.error("Assignment submission failed:", err);
+      res.status(500).json({ error: "Assignment submission failed" });
     }
-  } catch (err) {
-    console.error('Assignment submission failed:', err);
-    res.status(500).json({ error: 'Assignment submission failed' });
   }
-});
-
+);
 
 // --- CHECK-IN / OUT ---
-app.post('/checkin', authenticateToken, async (req, res) => {
+app.post("/checkin", authenticateToken, async (req, res) => {
   try {
     // Remove daily check: allow multiple check-ins per day
     const [checkin] = await sql`
@@ -348,11 +399,11 @@ app.post('/checkin', authenticateToken, async (req, res) => {
     res.status(201).json({ checkin });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Check-in failed' });
+    res.status(500).json({ error: "Check-in failed" });
   }
 });
 
-app.post('/checkout', authenticateToken, async (req, res) => {
+app.post("/checkout", authenticateToken, async (req, res) => {
   try {
     // Find the latest check-in without a checkout_time for this user
     const [checkin] = await sql`
@@ -363,18 +414,22 @@ app.post('/checkout', authenticateToken, async (req, res) => {
     `;
 
     if (!checkin) {
-      return res.status(400).json({ error: 'No active check-in found' });
+      return res.status(400).json({ error: "No active check-in found" });
     }
 
     // Only allow checkout if status is 'approved'
-    if (checkin.status !== 'approved') {
-      return res.status(400).json({ error: 'You cannot check out unless your check-in is approved.' });
+    if (checkin.status !== "approved") {
+      return res
+        .status(400)
+        .json({
+          error: "You cannot check out unless your check-in is approved.",
+        });
     }
 
     const now = new Date();
 
     // Parse today's check-in time into a Date object
-    const [hours, minutes] = checkin.checkin_time.split(':').map(Number);
+    const [hours, minutes] = checkin.checkin_time.split(":").map(Number);
     const checkinDate = new Date();
     checkinDate.setUTCHours(hours, minutes, 0, 0); // assuming checkin_time is in UTC
 
@@ -390,17 +445,18 @@ app.post('/checkout', authenticateToken, async (req, res) => {
       RETURNING *;
     `;
 
-    const readableDuration = `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`;
+    const readableDuration = `${Math.floor(durationMinutes / 60)}h ${
+      durationMinutes % 60
+    }m`;
 
     res.json({ checkout, readableDuration });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Checkout failed' });
+    res.status(500).json({ error: "Checkout failed" });
   }
 });
 
-
-app.get('/checkin/history', authenticateToken, async (req, res) => {
+app.get("/checkin/history", authenticateToken, async (req, res) => {
   try {
     const history = await sql`
       SELECT * FROM checkins
@@ -411,11 +467,11 @@ app.get('/checkin/history', authenticateToken, async (req, res) => {
     const formattedHistory = history.map((entry) => {
       let durationFormatted = null;
 
-      if (entry.duration && typeof entry.duration === 'number') {
+      if (entry.duration && typeof entry.duration === "number") {
         const hours = Math.floor(entry.duration / 60);
         const mins = entry.duration % 60;
         durationFormatted = `${hours}h ${mins}m`;
-      } else if (typeof entry.duration === 'string') {
+      } else if (typeof entry.duration === "string") {
         durationFormatted = entry.duration; // Fallback if duration is already formatted as string
       }
 
@@ -425,109 +481,139 @@ app.get('/checkin/history', authenticateToken, async (req, res) => {
     res.json({ history: formattedHistory });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch history' });
+    res.status(500).json({ error: "Failed to fetch history" });
   }
 });
-
-
-
 
 // --- ADMIN ---
 
 // get all users
-app.get('/admin/users', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+app.get("/admin/users", authenticateToken, async (req, res) => {
+  if (req.user.role !== "admin")
+    return res.status(403).json({ error: "Access denied" });
 
   try {
     const { track } = req.query;
     let users;
 
     if (track) {
-      users = await sql`SELECT * FROM users WHERE LOWER(track) = LOWER(${track}) ORDER BY created_at DESC;`;
+      users =
+        await sql`SELECT * FROM users WHERE LOWER(track) = LOWER(${track}) ORDER BY created_at DESC;`;
     } else {
       users = await sql`SELECT * FROM users ORDER BY created_at DESC;`;
     }
 
     res.json({ users });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch users' });
+    res.status(500).json({ error: "Failed to fetch users" });
   }
 });
 
 // Admin gives assignment to a track (or selected emails)
-app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+app.post(
+  "/admin/assignments",
+  authenticateToken,
+  upload.single("question_file"),
+  async (req, res) => {
+    if (req.user.role !== "admin")
+      return res.status(403).json({ error: "Access denied" });
 
-  const {
-    track,
-    date,
-    is_group,
-    time,
-    topic,
-    question_text,
-    question_link,
-    allowed_submission_types,
-    emails
-  } = req.body;
+    const {
+      track,
+      date,
+      is_group,
+      time,
+      topic,
+      question_text,
+      question_link,
+      allowed_submission_types,
+      emails,
+    } = req.body;
 
-  if (!track || !topic) return res.status(400).json({ error: 'Required fields missing' });
+    if (!track || !topic)
+      return res.status(400).json({ error: "Required fields missing" });
 
-  try {
-    // Build question safely
-    const question = {};
-    if (question_text?.trim()) question.text = question_text.trim();
-    if (question_link?.trim()) question.link = question_link.trim();
-    if (req.file && req.file.size > 0) {
-      question.file = await uploadImage(req.file);
-    }
-    if (!question.text && !question.link && !question.file) {
-      return res.status(400).json({ error: 'Provide at least one of question_text, question_link, or file' });
-    }
+    try {
+      let question = {};
 
-    // Normalize allowed types (store as JSON string if your column is TEXT)
-    let allowedTypes = allowed_submission_types;
-    if (typeof allowedTypes === 'string') {
-      allowedTypes = allowedTypes.split(',').map(t => t.trim().toLowerCase());
-    }
-    const normalizedAllowed = Array.isArray(allowedTypes) ? allowedTypes : [];
-    const allowedJson = JSON.stringify(normalizedAllowed);
+      if (typeof question_text === "string" && question_text.trim()) {
+        question.text = question_text.trim();
+      }
+      if (typeof question_link === "string" && question_link.trim()) {
+        question.link = question_link.trim();
+      }
+      if (req.file && req.file.size > 0) {
+        question.file = await uploadImage(req.file);
+      }
 
-    const assignmentDate = date || new Date().toISOString().slice(0, 10);
-    const assignmentTime = time || new Date().toISOString().slice(11, 19);
+      if (Object.keys(question).length === 0) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Provide at least one of question_text, question_link, or file",
+          });
+      }
 
-    // If targeting specific emails
-    if (emails) {
-      const emailList = (typeof emails === 'string'
-        ? emails.split(',').map(e => e.trim().toLowerCase())
-        : emails.map(e => String(e).trim().toLowerCase()))
-        .filter(Boolean);
+      // Normalize allowed types (store as JSON string if your column is TEXT)
+      let allowedTypes = allowed_submission_types;
+      if (typeof allowedTypes === "string") {
+        allowedTypes = allowedTypes
+          .split(",")
+          .map((t) => t.trim().toLowerCase());
+      }
+      const normalizedAllowed = Array.isArray(allowedTypes) ? allowedTypes : [];
+      const allowedJson = JSON.stringify(normalizedAllowed);
 
-      // OPTIONAL but recommended: ensure these emails exist & are in the track
-      const users = await sql`
+      const assignmentDate = date || new Date().toISOString().slice(0, 10);
+      const assignmentTime = time || new Date().toISOString().slice(11, 19);
+
+      // If targeting specific emails
+      if (emails) {
+        const emailList = (
+          typeof emails === "string"
+            ? emails.split(",").map((e) => e.trim().toLowerCase())
+            : emails.map((e) => String(e).trim().toLowerCase())
+        ).filter(Boolean);
+
+        // OPTIONAL but recommended: ensure these emails exist & are in the track
+        const users = await sql`
         SELECT email, track 
         FROM users 
         WHERE LOWER(email) = ANY(${emailList})
       `;
-      const notFound = emailList.filter(e => !users.find(u => u.email?.toLowerCase() === e));
-      if (notFound.length) {
-        return res.status(400).json({ error: `These emails do not exist: ${notFound.join(', ')}` });
-      }
-      const wrongTrack = users.filter(u => (u.track || '').toLowerCase() !== track.toLowerCase()).map(u => u.email);
-      if (wrongTrack.length) {
-        return res.status(400).json({ error: `Not in track "${track}": ${wrongTrack.join(', ')}` });
-      }
+        const notFound = emailList.filter(
+          (e) => !users.find((u) => u.email?.toLowerCase() === e)
+        );
+        if (notFound.length) {
+          return res
+            .status(400)
+            .json({
+              error: `These emails do not exist: ${notFound.join(", ")}`,
+            });
+        }
+        const wrongTrack = users
+          .filter((u) => (u.track || "").toLowerCase() !== track.toLowerCase())
+          .map((u) => u.email);
+        if (wrongTrack.length) {
+          return res
+            .status(400)
+            .json({
+              error: `Not in track "${track}": ${wrongTrack.join(", ")}`,
+            });
+        }
 
-      // Insert one personal assignment per email (delete previous same topic if any)
-      const inserted = [];
-      for (const email of emailList) {
-        await sql`
+        // Insert one personal assignment per email (delete previous same topic if any)
+        const inserted = [];
+        for (const email of emailList) {
+          await sql`
           DELETE FROM assignments 
           WHERE LOWER(track) = LOWER(${track})
             AND LOWER(topic) = LOWER(${topic})
             AND LOWER(email) = LOWER(${email});
         `;
 
-        const [row] = await sql`
+          const [row] = await sql`
           INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types, email)
           VALUES (
             ${track},
@@ -541,20 +627,20 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
           )
           RETURNING *;
         `;
-        inserted.push(row);
+          inserted.push(row);
+        }
+        return res.status(201).json({ assignments: inserted });
       }
-      return res.status(201).json({ assignments: inserted });
-    }
 
-    // Else: track-wide assignment (email = NULL)
-    await sql`
+      // Else: track-wide assignment (email = NULL)
+      await sql`
       DELETE FROM assignments 
       WHERE email IS NULL 
         AND LOWER(track) = LOWER(${track})
         AND LOWER(topic) = LOWER(${topic});
     `;
 
-    const [result] = await sql`
+      const [result] = await sql`
       INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types, email)
       VALUES (
         ${track},
@@ -569,17 +655,18 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
       RETURNING *;
     `;
 
-    res.status(201).json({ assignment: result });
-  } catch (err) {
-    console.error('Admin create assignment error:', err);
-    res.status(500).json({ error: 'Failed to create assignment' });
+      res.status(201).json({ assignment: result });
+    } catch (err) {
+      console.error("Admin create assignment error:", err);
+      res.status(500).json({ error: "Failed to create assignment" });
+    }
   }
-});
-
+);
 
 // GET /admin/assignments – Admin sees all assignments
-app.get('/admin/assignments', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+app.get("/admin/assignments", authenticateToken, async (req, res) => {
+  if (req.user.role !== "admin")
+    return res.status(403).json({ error: "Access denied" });
 
   try {
     const result = await sql`
@@ -587,23 +674,23 @@ app.get('/admin/assignments', authenticateToken, async (req, res) => {
     `;
     res.json({ assignments: result });
   } catch (err) {
-    console.error('Get all assignments error:', err);
-    res.status(500).json({ error: 'Failed to fetch assignments' });
+    console.error("Get all assignments error:", err);
+    res.status(500).json({ error: "Failed to fetch assignments" });
   }
 });
 
 //  Admin updates check-in status
-app.put('/admin/checkin/:id/status', authenticateToken, async (req, res) => {
+app.put("/admin/checkin/:id/status", authenticateToken, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Access denied. Admins only.' });
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Access denied. Admins only." });
     }
 
     const { status } = req.body;
-    const validStatuses = ['pending', 'approved', 'rejected'];
+    const validStatuses = ["pending", "approved", "rejected"];
 
     if (!validStatuses.includes(status)) {
-      return res.status(400).json({ error: 'Invalid status value' });
+      return res.status(400).json({ error: "Invalid status value" });
     }
 
     const [updated] = await sql`
@@ -614,49 +701,51 @@ app.put('/admin/checkin/:id/status', authenticateToken, async (req, res) => {
     `;
 
     if (!updated) {
-      return res.status(404).json({ error: 'Check-in record not found' });
+      return res.status(404).json({ error: "Check-in record not found" });
     }
 
-    res.json({ message: 'Status updated', checkin: updated });
+    res.json({ message: "Status updated", checkin: updated });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to update status' });
+    res.status(500).json({ error: "Failed to update status" });
   }
 });
 
 // get assignments by id
-app.get('/admin/assignments/:id', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+app.get("/admin/assignments/:id", authenticateToken, async (req, res) => {
+  if (req.user.role !== "admin")
+    return res.status(403).json({ error: "Access denied" });
 
   try {
     const [assignment] = await sql`
       SELECT * FROM assignments WHERE id = ${req.params.id};
     `;
 
-    if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
+    if (!assignment)
+      return res.status(404).json({ error: "Assignment not found" });
 
     res.json({ assignment });
   } catch (err) {
-    console.error('Get assignment by ID error:', err);
-    res.status(500).json({ error: 'Failed to fetch assignment' });
+    console.error("Get assignment by ID error:", err);
+    res.status(500).json({ error: "Failed to fetch assignment" });
   }
 });
 
 // get all check-ins for admin
-app.get('/admin/checkins', authenticateToken, async (req, res) => {
+app.get("/admin/checkins", authenticateToken, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Access denied. Admins only.' });
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ error: "Access denied. Admins only." });
     }
 
     const { status } = req.query;
-    const validStatuses = ['pending', 'approved', 'rejected'];
+    const validStatuses = ["pending", "approved", "rejected"];
 
     let checkins;
 
     if (status) {
       if (!validStatuses.includes(status)) {
-        return res.status(400).json({ error: 'Invalid status filter' });
+        return res.status(400).json({ error: "Invalid status filter" });
       }
 
       checkins = await sql`
@@ -674,7 +763,7 @@ app.get('/admin/checkins', authenticateToken, async (req, res) => {
     res.json({ checkins });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch check-ins' });
+    res.status(500).json({ error: "Failed to fetch check-ins" });
   }
 });
 
