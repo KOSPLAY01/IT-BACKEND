@@ -190,21 +190,21 @@ app.post('/auth/reset-password', async (req, res) => {
 });
 
 // --- ASSIGNMENT ROUTES ---
-
-// Get current assignment for user based on track
+// Get current assignment for user 
 app.get('/current-assignment', authenticateToken, async (req, res) => {
   try {
-    console.log("User track:", req.user.track); // debug
+    console.log("User ID:", req.user.id, "Track:", req.user.track); // debug
 
     const [assignment] = await sql`
       SELECT * FROM assignments
-      WHERE LOWER(track) = LOWER(${req.user.track})
+      WHERE user_id = ${req.user.id}
+         OR LOWER(track) = LOWER(${req.user.track})
       ORDER BY created_at DESC
       LIMIT 1;
     `;
 
     if (!assignment) {
-      return res.status(200).json({ message: 'No assignments found for your track' });
+      return res.status(200).json({ message: 'No assignments found for you' });
     }
 
     res.json({ assignment });
@@ -213,6 +213,7 @@ app.get('/current-assignment', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to get assignment' });
   }
 });
+
 
 
 // User submits assignment, validate allowed submission type
