@@ -391,14 +391,18 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
   }
 });
 
-// Admin gives assignment to a track (not individual user)
+// Admin gives assignment (to a whole track or specific users inside a track)
 app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
-  const { track, date, is_group, time, topic, question_text, question_link, allowed_submission_types } = req.body;
-  if (!track || !topic) return res.status(400).json({ error: 'Required fields missing' });
+  const { track, user_ids, date, is_group, time, topic, question_text, question_link, allowed_submission_types } = req.body;
+
+  if (!track || !topic) {
+    return res.status(400).json({ error: 'Track and topic are required' });
+  }
 
   try {
+    // --- Question handling ---
     let question = null;
     if (req.file) {
       question = await uploadImage(req.file);
@@ -408,31 +412,61 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
       question = question_text;
     }
 
-    // allowed_submission_types should be an array or comma-separated string, e.g. ['file','link'] or 'file,link'
+    // --- Allowed submission types ---
     let allowedTypes = allowed_submission_types;
     if (typeof allowedTypes === 'string') {
       allowedTypes = allowedTypes.split(',').map(t => t.trim());
     }
 
-    const result = await sql`
-      INSERT INTO assignments (track, date, is_group, time, topic, question, allowed_submission_types)
-      VALUES (
-        ${track},
-        ${date || new Date().toISOString().slice(0, 10)},
-        ${is_group || false},
-        ${time || new Date().toISOString().slice(11, 19)},
-        ${topic},
-        ${question},
-        ${JSON.stringify(allowedTypes)}
-      )
-      RETURNING *;
-    `;
-    res.status(201).json({ assignment: result[0] });
+    // --- Fetch target users ---
+    let users = [];
+    if (user_ids && Array.isArray(user_ids) && user_ids.length > 0) {
+      // Only these users inside the track
+      users = await sql`
+        SELECT * FROM users 
+        WHERE LOWER(track) = LOWER(${track})
+        AND id = ANY(${user_ids})
+      `;
+    } else {
+      // Everyone in the track
+      users = await sql`
+        SELECT * FROM users 
+        WHERE LOWER(track) = LOWER(${track})
+      `;
+    }
+
+    if (!users.length) {
+      return res.status(404).json({ error: 'No users found for this assignment' });
+    }
+
+    // --- Insert assignments for each user ---
+    const assignments = [];
+    for (const user of users) {
+      const [assignment] = await sql`
+        INSERT INTO assignments (user_id, track, date, is_group, time, topic, question, allowed_submission_types)
+        VALUES (
+          ${user.id},
+          ${user.track},
+          ${date || new Date().toISOString().slice(0, 10)},
+          ${is_group || false},
+          ${time || new Date().toISOString().slice(11, 19)},
+          ${topic},
+          ${question},
+          ${JSON.stringify(allowedTypes)}
+        )
+        RETURNING *;
+      `;
+      assignments.push(assignment);
+    }
+
+    res.status(201).json({ assignments });
   } catch (err) {
-    console.error('Admin create assignment error:', err);   
-    res.status(500).json({ error: 'Failed to create assignment' });
+    console.error('Admin create assignment error:', err);
+    res.status(500).json({ error: 'Failed to create assignments' });
   }
 });
+
+
 
 // GET /admin/assignments – Admin sees all assignments
 app.get('/admin/assignments', authenticateToken, async (req, res) => {
