@@ -190,15 +190,15 @@ app.post('/auth/reset-password', async (req, res) => {
 });
 
 // --- ASSIGNMENT ROUTES ---
-// Get current assignment for user 
+
+// Get the latest assignment for a user
 app.get('/current-assignment', authenticateToken, async (req, res) => {
   try {
-    console.log("User ID:", req.user.id, "Track:", req.user.track); // debug
-
     const [assignment] = await sql`
       SELECT * FROM assignments
-      WHERE user_id = ${req.user.id}
-         OR LOWER(track) = LOWER(${req.user.track})
+      WHERE 
+        (user_id = ${req.user.id})
+        OR (user_id IS NULL AND LOWER(track) = LOWER(${req.user.track}))
       ORDER BY created_at DESC
       LIMIT 1;
     `;
@@ -209,11 +209,10 @@ app.get('/current-assignment', authenticateToken, async (req, res) => {
 
     res.json({ assignment });
   } catch (err) {
-    console.error(err);
+    console.error('Get assignment error:', err);
     res.status(500).json({ error: 'Failed to get assignment' });
   }
 });
-
 
 
 // User submits assignment, validate allowed submission type
@@ -392,18 +391,20 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
   }
 });
 
-// Admin gives assignment (to a whole track or specific users inside a track)
+
+// Admin gives assignment (to track or specific users in track)
 app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Access denied' });
+  }
 
   const { track, user_ids, date, is_group, time, topic, question_text, question_link, allowed_submission_types } = req.body;
-
   if (!track || !topic) {
     return res.status(400).json({ error: 'Track and topic are required' });
   }
 
   try {
-    // --- Question handling ---
+    // Handle question input (file, link, or text)
     let question = null;
     if (req.file) {
       question = await uploadImage(req.file);
@@ -413,41 +414,46 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
       question = question_text;
     }
 
-    // --- Allowed submission types ---
+    // Normalize allowed submission types
     let allowedTypes = allowed_submission_types;
     if (typeof allowedTypes === 'string') {
       allowedTypes = allowedTypes.split(',').map(t => t.trim());
     }
 
-    // --- Fetch target users ---
-    let users = [];
+    const assignments = [];
+
     if (user_ids && Array.isArray(user_ids) && user_ids.length > 0) {
-      // Only these users inside the track
-      users = await sql`
+      // 📌 Assign to specific users in the track
+      const users = await sql`
         SELECT * FROM users 
         WHERE LOWER(track) = LOWER(${track})
         AND id = ANY(${user_ids})
       `;
+
+      for (const user of users) {
+        const [assignment] = await sql`
+          INSERT INTO assignments (user_id, track, date, is_group, time, topic, question, allowed_submission_types)
+          VALUES (
+            ${user.id},
+            ${user.track},
+            ${date || new Date().toISOString().slice(0, 10)},
+            ${is_group || false},
+            ${time || new Date().toISOString().slice(11, 19)},
+            ${topic},
+            ${question},
+            ${JSON.stringify(allowedTypes)}
+          )
+          RETURNING *;
+        `;
+        assignments.push(assignment);
+      }
     } else {
-      // Everyone in the track
-      users = await sql`
-        SELECT * FROM users 
-        WHERE LOWER(track) = LOWER(${track})
-      `;
-    }
-
-    if (!users.length) {
-      return res.status(404).json({ error: 'No users found for this assignment' });
-    }
-
-    // --- Insert assignments for each user ---
-    const assignments = [];
-    for (const user of users) {
+      // 📌 Assign to whole track (no user_id)
       const [assignment] = await sql`
         INSERT INTO assignments (user_id, track, date, is_group, time, topic, question, allowed_submission_types)
         VALUES (
-          ${user.id},
-          ${user.track},
+          NULL,
+          ${track},
           ${date || new Date().toISOString().slice(0, 10)},
           ${is_group || false},
           ${time || new Date().toISOString().slice(11, 19)},
@@ -463,9 +469,10 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
     res.status(201).json({ assignments });
   } catch (err) {
     console.error('Admin create assignment error:', err);
-    res.status(500).json({ error: 'Failed to create assignments' });
+    res.status(500).json({ error: 'Failed to create assignment' });
   }
 });
+
 
 
 
