@@ -510,71 +510,92 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
 });
 
 // Admin creates assignment
-app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-
-  const {
-    track,
-    is_group,
-    group_members,  // array of user IDs from the form
-    date,
-    time,
-    topic,
-    question_text,
-    question_link,
-    allowed_submission_types,
-    deadline
-  } = req.body;
-
-  if (!track || !topic) {
-    return res.status(400).json({ error: 'Track and topic are required' });
-  }
-
-  try {
-    // Handle question
-    let question = null;
-    if (req.file) {
-      question = await uploadImage(req.file);
-    } else if (question_link) {
-      question = question_link;
-    } else if (question_text) {
-      question = question_text;
+app.post(
+  '/admin/assignments',
+  authenticateToken,
+  upload.single('question_file'), // single file upload
+  async (req, res) => {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Parse allowed types
-    let allowedTypes = allowed_submission_types;
-    if (typeof allowedTypes === 'string') {
-      allowedTypes = allowedTypes.split(',').map(t => t.trim());
+    try {
+      const {
+        track,
+        is_group,
+        group_members, // array of user IDs (as strings) from the form
+        date,
+        time,
+        topic,
+        question_text,
+        question_link,
+        allowed_submission_types,
+        deadline,
+      } = req.body;
+
+      if (!track || !topic) {
+        return res.status(400).json({ error: 'Track and topic are required' });
+      }
+
+      // Handle question content
+      let question = null;
+      if (req.file) {
+        question = await uploadImage(req.file); // your existing upload logic
+      } else if (question_link) {
+        question = question_link;
+      } else if (question_text) {
+        question = question_text;
+      }
+
+      // Parse allowed submission types into an array
+      let allowedTypes = [];
+      if (allowed_submission_types) {
+        allowedTypes =
+          typeof allowed_submission_types === 'string'
+            ? allowed_submission_types.split(',').map(t => t.trim())
+            : allowed_submission_types;
+      }
+
+      // Convert group_members to PostgreSQL INT[] literal
+      let pgGroupMembers = null;
+      if (is_group && group_members) {
+        const membersArray =
+          typeof group_members === 'string'
+            ? JSON.parse(group_members)
+            : group_members;
+        if (membersArray.length > 0) {
+          pgGroupMembers = `{${membersArray.join(',')}}`;
+        }
+      }
+
+      // Insert into database
+      const [assignment] = await sql`
+        INSERT INTO assignments (
+          track, date, is_group, group_members, time,
+          topic, question, allowed_submission_types, deadline
+        )
+        VALUES (
+          ${track},
+          ${date || new Date().toISOString().slice(0, 10)},
+          ${is_group || false},
+          ${pgGroupMembers},
+          ${time || new Date().toISOString().slice(11, 19)},
+          ${topic},
+          ${question},
+          ${JSON.stringify(allowedTypes)},
+          ${deadline || null}
+        )
+        RETURNING *;
+      `;
+
+      res.status(201).json({ assignment });
+    } catch (err) {
+      console.error('Admin create assignment error:', err);
+      res.status(500).json({ error: 'Failed to create assignment' });
     }
-
-    // Insert assignment
-    const [assignment] = await sql`
-      INSERT INTO assignments (
-        track, date, is_group, group_members, time,
-        topic, question, allowed_submission_types, deadline
-      )
-      VALUES (
-        ${track},
-        ${date || new Date().toISOString().slice(0, 10)},
-        ${is_group || false},
-        ${is_group && group_members ? JSON.stringify(group_members) : null},
-        ${time || new Date().toISOString().slice(11, 19)},
-        ${topic},
-        ${question},
-        ${JSON.stringify(allowedTypes)},
-        ${deadline || null}
-      )
-      RETURNING *;
-    `;
-
-    res.status(201).json({ assignment });
-  } catch (err) {
-    console.error('Admin create assignment error:', err);
-    res.status(500).json({ error: 'Failed to create assignment' });
   }
-});
+);
+
 
 // Admin extends assignment deadline
 app.put('/admin/assignments/:id/deadline', authenticateToken, async (req, res) => {
