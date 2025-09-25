@@ -509,8 +509,6 @@ app.get('/admin/users', authenticateToken, async (req, res) => {
   }
 });
 
-
-
 // Admin creates assignment
 app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
   if (req.user.role !== 'admin') {
@@ -578,8 +576,6 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
   }
 });
 
-
-
 // Admin extends assignment deadline
 app.put('/admin/assignments/:id/deadline', authenticateToken, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
@@ -604,7 +600,6 @@ app.put('/admin/assignments/:id/deadline', authenticateToken, async (req, res) =
     res.status(500).json({ error: 'Failed to extend deadline' });
   }
 });
-
 
 // GET ALL ASSIGNMENTS – Admin sees all assignments
 app.get('/admin/assignments', authenticateToken, async (req, res) => {
@@ -637,7 +632,6 @@ app.get('/admin/assignments', authenticateToken, async (req, res) => {
   }
 });
 
-
 // GET /admin/assignments/:id – Admin sees assignment + all submissions under it
 app.get('/admin/assignments/:id', authenticateToken, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
@@ -661,7 +655,8 @@ app.get('/admin/assignments/:id', authenticateToken, async (req, res) => {
     else if (endDate) baseQuery = sql`${baseQuery} AND s.date <= ${endDate}`;
 
     const dataQuery = sql`
-      SELECT s.*, u.name, u.email, u.track ${baseQuery}
+      SELECT s.*, u.name, u.email, u.track, u.reg_no
+      ${baseQuery}
       ORDER BY s.date DESC, s.time DESC
       LIMIT ${limit} OFFSET ${offset};
     `;
@@ -676,8 +671,6 @@ app.get('/admin/assignments/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch assignment and submissions' });
   }
 });
-
-
 
 // GET /admin/submissions – Admin sees all submissions across all assignments
 app.get('/admin/submissions', authenticateToken, async (req, res) => {
@@ -700,7 +693,8 @@ app.get('/admin/submissions', authenticateToken, async (req, res) => {
     else if (endDate) baseQuery = sql`${baseQuery} AND s.date <= ${endDate}`;
 
     const dataQuery = sql`
-      SELECT s.*, a.topic, a.track, a.deadline, u.name, u.email, u.track AS user_track
+      SELECT s.*, a.topic, a.track, a.deadline, 
+             u.name, u.email, u.track AS user_track, u.reg_no
       ${baseQuery}
       ORDER BY s.date DESC, s.time DESC
       LIMIT ${limit} OFFSET ${offset};
@@ -716,7 +710,6 @@ app.get('/admin/submissions', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch submissions' });
   }
 });
-
 
 // get all check-ins for admin with optional filters
 app.get('/admin/checkins', authenticateToken, async (req, res) => {
