@@ -9,6 +9,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import nodemailer from 'nodemailer';
+import { Parser } from 'json2csv';
 
 dotenv.config();
 
@@ -70,7 +71,7 @@ const uploadImage = async (file) => {
 };
 
 app.get('/', (req, res) => {
-  res.send('Welcome to Guru IT Website');
+  res.send('Welcome to Guru IT API');
 });
 
 // --- AUTH ROUTES ---
@@ -191,31 +192,58 @@ app.post('/auth/reset-password', async (req, res) => {
 
 // --- ASSIGNMENT ROUTES ---
 
-// Get the latest assignment for a user
+// Get current assignment for logged-in user
 app.get('/current-assignment', authenticateToken, async (req, res) => {
   try {
+    //  Get the latest active assignment for this user
     const [assignment] = await sql`
-      SELECT * FROM assignments
-      WHERE 
-        (user_id = ${req.user.id})
-        OR (user_id IS NULL AND LOWER(track) = LOWER(${req.user.track}))
-      ORDER BY created_at DESC
+      SELECT *
+      FROM assignments
+      WHERE (
+        (track = ${req.user.track})
+        OR (
+          is_group = true
+          AND group_members::jsonb @> ${JSON.stringify([req.user.id])}::jsonb
+        )
+      )
+      AND (deadline IS NULL OR deadline >= CURRENT_DATE)
+      ORDER BY date DESC, time DESC
       LIMIT 1;
     `;
 
     if (!assignment) {
-      return res.status(200).json({ message: 'No assignments found for you' });
+      return res.status(404).json({ error: 'No active assignment found' });
     }
 
-    res.json({ assignment });
+    //  Check if user already submitted
+    const [submission] = await sql`
+      SELECT *
+      FROM submissions
+      WHERE assignment_id = ${assignment.id}
+        AND user_id = ${req.user.id}
+      LIMIT 1;
+    `;
+
+    if (submission) {
+      return res.status(200).json({
+        message: 'No current assignment',
+        assignment: null
+      });
+    }
+
+    res.json({
+      assignment,
+      submitted: false,
+      submission: null
+    });
   } catch (err) {
-    console.error('Get assignment error:', err);
-    res.status(500).json({ error: 'Failed to get assignment' });
+    console.error('Get current assignment error:', err);
+    res.status(500).json({ error: 'Failed to fetch assignment' });
   }
 });
 
 
-// User submits assignment, validate allowed submission type
+// User submits assignment
 app.post('/assignment', authenticateToken, upload.single('file'), async (req, res) => {
   const { topic, is_group, group_members, email, link } = req.body;
 
@@ -223,51 +251,101 @@ app.post('/assignment', authenticateToken, upload.single('file'), async (req, re
     return res.status(400).json({ error: 'Required fields missing' });
 
   try {
-    // Get the latest assignment for the user's track and topic
+    // ✅ Get the latest assignment for the user’s track & topic
     const [assignment] = await sql`
-      SELECT * FROM assignments WHERE track = ${req.user.track} AND topic = ${topic} ORDER BY date DESC, time DESC LIMIT 1;
+      SELECT * FROM assignments
+      WHERE track = ${req.user.track} AND topic = ${topic}
+      ORDER BY date DESC, time DESC
+      LIMIT 1;
     `;
-    if (!assignment) return res.status(404).json({ error: 'Assignment not found for your track and topic' });
+    if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
 
+    // ✅ Check deadline
+    if (assignment.deadline && new Date() > new Date(assignment.deadline)) {
+      return res.status(400).json({ error: 'Deadline has passed. Submission not allowed.' });
+    }
+
+    // ✅ Validate submission type
     let allowedTypes = assignment.allowed_submission_types;
     if (typeof allowedTypes === 'string') {
       try { allowedTypes = JSON.parse(allowedTypes); } catch { allowedTypes = [allowedTypes]; }
     }
     if (!Array.isArray(allowedTypes)) allowedTypes = [];
 
-    // Validate submission type
     if (req.file && !allowedTypes.includes('file')) {
       return res.status(400).json({ error: 'File submission not allowed for this assignment' });
     }
     if (link && !allowedTypes.includes('link')) {
       return res.status(400).json({ error: 'Link submission not allowed for this assignment' });
     }
-    if (!req.file && !link) {
-      return res.status(400).json({ error: 'No submission provided' });
-    }
 
+    // ✅ Handle submission
     let submission = null;
-    if (req.file) {
-      submission = await uploadImage(req.file);
-    } else if (link) {
-      submission = link;
-    }
+    if (req.file) submission = await uploadImage(req.file);
+    else if (link) submission = link;
 
+    // ✅ Insert into submissions (not assignments)
     const [submitted] = await sql`
-      INSERT INTO assignments (
-        user_id, track, topic, date, time, is_group, group_members, email, submission
+      INSERT INTO submissions (
+        assignment_id, user_id, track, topic, date, time, is_group, group_members, email, submission
       ) VALUES (
-        ${req.user.id}, ${req.user.track}, ${topic}, CURRENT_DATE, CURRENT_TIME,
+        ${assignment.id}, ${req.user.id}, ${req.user.track}, ${topic}, CURRENT_DATE, CURRENT_TIME,
         ${is_group || false}, ${group_members || []}, ${email}, ${submission}
       )
       RETURNING *;
     `;
 
-    res.status(201).json({ assignment: submitted });
+    res.status(201).json({ submission: submitted });
   } catch (err) {
+    console.error('Submit assignment error:', err);
     res.status(500).json({ error: 'Assignment submission failed' });
   }
 });
+
+// GET /user/submissions – user sees their own submission history with assignment question
+app.get('/user/submissions', authenticateToken, async (req, res) => {
+  try {
+    const { track, startDate, endDate, limit = 20, offset = 0 } = req.query;
+    const userId = req.user.id;
+
+    let baseQuery = sql`
+      FROM submissions s
+      JOIN assignments a ON s.assignment_id = a.id
+      WHERE s.user_id = ${userId}
+    `;
+
+    if (track) baseQuery = sql`${baseQuery} AND LOWER(a.track) = LOWER(${track})`;
+    if (startDate && endDate) baseQuery = sql`${baseQuery} AND s.date BETWEEN ${startDate} AND ${endDate}`;
+    else if (startDate) baseQuery = sql`${baseQuery} AND s.date >= ${startDate}`;
+    else if (endDate) baseQuery = sql`${baseQuery} AND s.date <= ${endDate}`;
+
+    // Get paginated data including question
+    const dataQuery = sql`
+      SELECT 
+        s.*, 
+        a.topic, 
+        a.track, 
+        a.deadline, 
+        a.question
+      ${baseQuery}
+      ORDER BY s.date DESC, s.time DESC
+      LIMIT ${limit} OFFSET ${offset};
+    `;
+
+    // Get total count
+    const countQuery = sql`SELECT COUNT(*) ${baseQuery};`;
+
+    const [submissions, [countResult]] = await Promise.all([dataQuery, countQuery]);
+    const totalCount = Number(countResult.count);
+
+    res.json({ submissions, totalCount, limit: Number(limit), offset: Number(offset) });
+  } catch (err) {
+    console.error('Get user submission history error:', err);
+    res.status(500).json({ error: 'Failed to fetch submission history' });
+  }
+});
+
+
 
 // --- CHECK-IN / OUT ---
 app.post('/checkin', authenticateToken, async (req, res) => {
@@ -371,40 +449,64 @@ app.get('/checkin/history', authenticateToken, async (req, res) => {
 
 // --- ADMIN ---
 
-// get all users
+// GET ALL USERS 
 app.get('/admin/users', authenticateToken, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
   try {
-    const { track } = req.query;
-    let users;
+    const { track, name, limit = 20, offset = 0 } = req.query;
 
-    if (track) {
-      users = await sql`SELECT * FROM users WHERE LOWER(track) = LOWER(${track}) ORDER BY created_at DESC;`;
-    } else {
-      users = await sql`SELECT * FROM users ORDER BY created_at DESC;`;
-    }
+    let baseQuery = sql`FROM users WHERE 1=1`;
 
-    res.json({ users });
+    if (track) baseQuery = sql`${baseQuery} AND LOWER(track) = LOWER(${track})`;
+    if (name) baseQuery = sql`${baseQuery} AND LOWER(name) LIKE LOWER(${`%${name}%`})`;
+
+    // Get data
+    const dataQuery = sql`
+      SELECT * ${baseQuery}
+      ORDER BY created_at DESC
+      LIMIT ${limit} OFFSET ${offset};
+    `;
+
+    // Get total count
+    const countQuery = sql`SELECT COUNT(*) ${baseQuery};`;
+
+    const [users, [countResult]] = await Promise.all([dataQuery, countQuery]);
+    const totalCount = Number(countResult.count);
+
+    res.json({ users, totalCount, limit: Number(limit), offset: Number(offset) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch users' });
   }
 });
 
 
-// Admin gives assignment (to track or specific users in track)
+
+// Admin creates assignment
 app.post('/admin/assignments', authenticateToken, upload.single('question_file'), async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Access denied' });
   }
 
-  const { track, user_ids, date, is_group, time, topic, question_text, question_link, allowed_submission_types } = req.body;
+  const {
+    track,
+    is_group,
+    group_members,  // array of user IDs from the form
+    date,
+    time,
+    topic,
+    question_text,
+    question_link,
+    allowed_submission_types,
+    deadline
+  } = req.body;
+
   if (!track || !topic) {
     return res.status(400).json({ error: 'Track and topic are required' });
   }
 
   try {
-    // Handle question input (file, link, or text)
+    // Handle question
     let question = null;
     if (req.file) {
       question = await uploadImage(req.file);
@@ -414,59 +516,33 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
       question = question_text;
     }
 
-    // Normalize allowed submission types
+    // Parse allowed types
     let allowedTypes = allowed_submission_types;
     if (typeof allowedTypes === 'string') {
       allowedTypes = allowedTypes.split(',').map(t => t.trim());
     }
 
-    const assignments = [];
+    // Insert assignment
+    const [assignment] = await sql`
+      INSERT INTO assignments (
+        track, date, is_group, group_members, time,
+        topic, question, allowed_submission_types, deadline
+      )
+      VALUES (
+        ${track},
+        ${date || new Date().toISOString().slice(0, 10)},
+        ${is_group || false},
+        ${is_group && group_members ? JSON.stringify(group_members) : null},
+        ${time || new Date().toISOString().slice(11, 19)},
+        ${topic},
+        ${question},
+        ${JSON.stringify(allowedTypes)},
+        ${deadline || null}
+      )
+      RETURNING *;
+    `;
 
-    if (user_ids && Array.isArray(user_ids) && user_ids.length > 0) {
-      // 📌 Assign to specific users in the track
-      const users = await sql`
-        SELECT * FROM users 
-        WHERE LOWER(track) = LOWER(${track})
-        AND id = ANY(${user_ids})
-      `;
-
-      for (const user of users) {
-        const [assignment] = await sql`
-          INSERT INTO assignments (user_id, track, date, is_group, time, topic, question, allowed_submission_types)
-          VALUES (
-            ${user.id},
-            ${user.track},
-            ${date || new Date().toISOString().slice(0, 10)},
-            ${is_group || false},
-            ${time || new Date().toISOString().slice(11, 19)},
-            ${topic},
-            ${question},
-            ${JSON.stringify(allowedTypes)}
-          )
-          RETURNING *;
-        `;
-        assignments.push(assignment);
-      }
-    } else {
-      // 📌 Assign to whole track (no user_id)
-      const [assignment] = await sql`
-        INSERT INTO assignments (user_id, track, date, is_group, time, topic, question, allowed_submission_types)
-        VALUES (
-          NULL,
-          ${track},
-          ${date || new Date().toISOString().slice(0, 10)},
-          ${is_group || false},
-          ${time || new Date().toISOString().slice(11, 19)},
-          ${topic},
-          ${question},
-          ${JSON.stringify(allowedTypes)}
-        )
-        RETURNING *;
-      `;
-      assignments.push(assignment);
-    }
-
-    res.status(201).json({ assignments });
+    res.status(201).json({ assignment });
   } catch (err) {
     console.error('Admin create assignment error:', err);
     res.status(500).json({ error: 'Failed to create assignment' });
@@ -475,23 +551,181 @@ app.post('/admin/assignments', authenticateToken, upload.single('question_file')
 
 
 
+// Admin extends assignment deadline
+app.put('/admin/assignments/:id/deadline', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
-// GET /admin/assignments – Admin sees all assignments
+  const { id } = req.params;
+  const { new_deadline } = req.body;
+
+  if (!new_deadline) return res.status(400).json({ error: 'New deadline required' });
+
+  try {
+    const [updated] = await sql`
+      UPDATE assignments
+      SET deadline = ${new_deadline}
+      WHERE id = ${id}
+      RETURNING *;
+    `;
+    if (!updated) return res.status(404).json({ error: 'Assignment not found' });
+
+    res.json({ assignment: updated });
+  } catch (err) {
+    console.error('Extend deadline error:', err);
+    res.status(500).json({ error: 'Failed to extend deadline' });
+  }
+});
+
+
+// GET ALL ASSIGNMENTS – Admin sees all assignments
 app.get('/admin/assignments', authenticateToken, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
 
   try {
-    const result = await sql`
-      SELECT * FROM assignments ORDER BY date DESC, time DESC;
+    const { track, startDate, endDate, limit = 20, offset = 0 } = req.query;
+
+    let baseQuery = sql`FROM assignments WHERE 1=1`;
+
+    if (track) baseQuery = sql`${baseQuery} AND LOWER(track) = LOWER(${track})`;
+    if (startDate && endDate) baseQuery = sql`${baseQuery} AND date BETWEEN ${startDate} AND ${endDate}`;
+    else if (startDate) baseQuery = sql`${baseQuery} AND date >= ${startDate}`;
+    else if (endDate) baseQuery = sql`${baseQuery} AND date <= ${endDate}`;
+
+    const dataQuery = sql`
+      SELECT * ${baseQuery}
+      ORDER BY date DESC, time DESC
+      LIMIT ${limit} OFFSET ${offset};
     `;
-    res.json({ assignments: result });
+    const countQuery = sql`SELECT COUNT(*) ${baseQuery};`;
+
+    const [assignments, [countResult]] = await Promise.all([dataQuery, countQuery]);
+    const totalCount = Number(countResult.count);
+
+    res.json({ assignments, totalCount, limit: Number(limit), offset: Number(offset) });
   } catch (err) {
     console.error('Get all assignments error:', err);
     res.status(500).json({ error: 'Failed to fetch assignments' });
   }
 });
 
-//  Admin updates check-in status
+
+// GET /admin/assignments/:id – Admin sees assignment + all submissions under it
+app.get('/admin/assignments/:id', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    const { track, startDate, endDate, limit = 20, offset = 0 } = req.query;
+    const { id } = req.params;
+
+    const [assignment] = await sql`SELECT * FROM assignments WHERE id = ${id}`;
+    if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
+
+    let baseQuery = sql`
+      FROM submissions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.assignment_id = ${id}
+    `;
+
+    if (track) baseQuery = sql`${baseQuery} AND LOWER(u.track) = LOWER(${track})`;
+    if (startDate && endDate) baseQuery = sql`${baseQuery} AND s.date BETWEEN ${startDate} AND ${endDate}`;
+    else if (startDate) baseQuery = sql`${baseQuery} AND s.date >= ${startDate}`;
+    else if (endDate) baseQuery = sql`${baseQuery} AND s.date <= ${endDate}`;
+
+    const dataQuery = sql`
+      SELECT s.*, u.name, u.email, u.track ${baseQuery}
+      ORDER BY s.date DESC, s.time DESC
+      LIMIT ${limit} OFFSET ${offset};
+    `;
+    const countQuery = sql`SELECT COUNT(*) ${baseQuery};`;
+
+    const [submissions, [countResult]] = await Promise.all([dataQuery, countQuery]);
+    const totalCount = Number(countResult.count);
+
+    res.json({ assignment, submissions, totalCount, limit: Number(limit), offset: Number(offset) });
+  } catch (err) {
+    console.error('Get assignment by ID error:', err);
+    res.status(500).json({ error: 'Failed to fetch assignment and submissions' });
+  }
+});
+
+
+
+// GET /admin/submissions – Admin sees all submissions across all assignments
+app.get('/admin/submissions', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    const { track, startDate, endDate, assignmentId, limit = 20, offset = 0 } = req.query;
+
+    let baseQuery = sql`
+      FROM submissions s
+      JOIN assignments a ON s.assignment_id = a.id
+      JOIN users u ON s.user_id = u.id
+      WHERE 1=1
+    `;
+
+    if (assignmentId) baseQuery = sql`${baseQuery} AND s.assignment_id = ${assignmentId}`;
+    if (track) baseQuery = sql`${baseQuery} AND LOWER(u.track) = LOWER(${track})`;
+    if (startDate && endDate) baseQuery = sql`${baseQuery} AND s.date BETWEEN ${startDate} AND ${endDate}`;
+    else if (startDate) baseQuery = sql`${baseQuery} AND s.date >= ${startDate}`;
+    else if (endDate) baseQuery = sql`${baseQuery} AND s.date <= ${endDate}`;
+
+    const dataQuery = sql`
+      SELECT s.*, a.topic, a.track, a.deadline, u.name, u.email, u.track AS user_track
+      ${baseQuery}
+      ORDER BY s.date DESC, s.time DESC
+      LIMIT ${limit} OFFSET ${offset};
+    `;
+    const countQuery = sql`SELECT COUNT(*) ${baseQuery};`;
+
+    const [submissions, [countResult]] = await Promise.all([dataQuery, countQuery]);
+    const totalCount = Number(countResult.count);
+
+    res.json({ submissions, totalCount, limit: Number(limit), offset: Number(offset) });
+  } catch (err) {
+    console.error('Get all submissions error:', err);
+    res.status(500).json({ error: 'Failed to fetch submissions' });
+  }
+});
+
+
+// get all check-ins for admin with optional filters
+app.get('/admin/checkins', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied. Admins only.' });
+
+  try {
+    const { status, name, limit = 20, offset = 0 } = req.query;
+    const validStatuses = ['pending', 'approved', 'rejected'];
+
+    let baseQuery = sql`FROM checkins WHERE 1=1`;
+
+    if (status) {
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({ error: 'Invalid status filter' });
+      }
+      baseQuery = sql`${baseQuery} AND status = ${status}`;
+    }
+    if (name) baseQuery = sql`${baseQuery} AND LOWER(name) LIKE LOWER(${`%${name}%`})`;
+
+    const dataQuery = sql`
+      SELECT * ${baseQuery}
+      ORDER BY date DESC, checkin_time DESC
+      LIMIT ${limit} OFFSET ${offset};
+    `;
+    const countQuery = sql`SELECT COUNT(*) ${baseQuery};`;
+
+    const [checkins, [countResult]] = await Promise.all([dataQuery, countQuery]);
+    const totalCount = Number(countResult.count);
+
+    res.json({ checkins, totalCount, limit: Number(limit), offset: Number(offset) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch check-ins' });
+  }
+});
+
+
+// Admin updates check-in status + logs attendance
 app.put('/admin/checkin/:id/status', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
@@ -505,6 +739,30 @@ app.put('/admin/checkin/:id/status', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Invalid status value' });
     }
 
+    const [checkin] = await sql`
+      SELECT * FROM checkins WHERE id = ${req.params.id}
+    `;
+
+    if (!checkin) {
+      return res.status(404).json({ error: 'Check-in record not found' });
+    }
+
+    // === If rejected → clear checkin & related attendance ===
+    if (status === 'rejected') {
+      await sql`
+        DELETE FROM checkins
+        WHERE id = ${req.params.id};
+      `;
+
+      await sql`
+        DELETE FROM attendance
+        WHERE user_id = ${checkin.user_id} AND date = ${checkin.date};
+      `;
+
+      return res.json({ message: 'Check-in rejected and records cleared' });
+    }
+
+    // === If approved → update and log attendance ===
     const [updated] = await sql`
       UPDATE checkins
       SET status = ${status}
@@ -512,8 +770,15 @@ app.put('/admin/checkin/:id/status', authenticateToken, async (req, res) => {
       RETURNING *;
     `;
 
-    if (!updated) {
-      return res.status(404).json({ error: 'Check-in record not found' });
+    if (status === 'approved') {
+      const [user] = await sql`SELECT * FROM users WHERE id = ${updated.user_id}`;
+      if (user) {
+        await sql`
+          INSERT INTO attendance (user_id, name, email, track, date)
+          VALUES (${user.id}, ${user.name}, ${user.email}, ${user.track}, ${updated.date})
+          ON CONFLICT (user_id, date) DO NOTHING;
+        `;
+      }
     }
 
     res.json({ message: 'Status updated', checkin: updated });
@@ -523,59 +788,74 @@ app.put('/admin/checkin/:id/status', authenticateToken, async (req, res) => {
   }
 });
 
-// get assignments by id
-app.get('/admin/assignments/:id', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+
+// GET /admin/attendance/csv
+app.get('/admin/attendance/csv', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Access denied. Admins only.' });
+  }
 
   try {
-    const [assignment] = await sql`
-      SELECT * FROM assignments WHERE id = ${req.params.id};
+    const { date } = req.query;
+    const attendance = await sql`
+      SELECT * FROM attendance
+      WHERE date = ${date || new Date().toISOString().slice(0, 10)}
+      ORDER BY track, name;
     `;
 
-    if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
+    if (!attendance.length) {
+      return res.status(404).json({ error: 'No attendance records found' });
+    }
 
-    res.json({ assignment });
+    const fields = ['id', 'user_id', 'name', 'email', 'track', 'date'];
+    const parser = new Parser({ fields });
+    const csv = parser.parse(attendance);
+
+    res.header('Content-Type', 'text/csv');
+    res.attachment(`attendance_${date || 'today'}.csv`);
+    res.send(csv);
   } catch (err) {
-    console.error('Get assignment by ID error:', err);
-    res.status(500).json({ error: 'Failed to fetch assignment' });
+    console.error('Download attendance error:', err);
+    res.status(500).json({ error: 'Failed to generate attendance CSV' });
   }
 });
 
-// get all check-ins for admin
-app.get('/admin/checkins', authenticateToken, async (req, res) => {
+// GET /admin/attendance – view attendance list in JSON
+app.get('/admin/attendance', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Access denied. Admins only.' });
+  }
+
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Access denied. Admins only.' });
-    }
+    const { date, track } = req.query;
 
-    const { status } = req.query;
-    const validStatuses = ['pending', 'approved', 'rejected'];
+    let query = sql`
+      SELECT * FROM attendance
+      WHERE 1=1
+    `;
 
-    let checkins;
-
-    if (status) {
-      if (!validStatuses.includes(status)) {
-        return res.status(400).json({ error: 'Invalid status filter' });
-      }
-
-      checkins = await sql`
-        SELECT * FROM checkins
-        WHERE status = ${status}
-        ORDER BY date DESC, checkin_time DESC;
-      `;
+    if (date) {
+      query = sql`${query} AND date = ${date}`;
     } else {
-      checkins = await sql`
-        SELECT * FROM checkins
-        ORDER BY date DESC, checkin_time DESC;
-      `;
+      // default to today
+      query = sql`${query} AND date = ${new Date().toISOString().slice(0, 10)}`;
     }
 
-    res.json({ checkins });
+    if (track) {
+      query = sql`${query} AND LOWER(track) = LOWER(${track})`;
+    }
+
+    query = sql`${query} ORDER BY track, name`;
+
+    const records = await query;
+
+    res.json({ attendance: records });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to fetch check-ins' });
+    console.error('Get attendance error:', err);
+    res.status(500).json({ error: 'Failed to fetch attendance' });
   }
 });
+
 
 // --- START SERVER ---
 const PORT = process.env.PORT || 5000;
