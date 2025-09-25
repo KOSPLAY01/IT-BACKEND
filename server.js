@@ -74,6 +74,7 @@ app.get('/', (req, res) => {
   res.send('Welcome to Guru IT API');
 });
 
+
 // --- AUTH ROUTES ---
 
 app.post('/register', upload.single('image'), async (req, res) => {
