@@ -415,6 +415,34 @@ app.post('/checkout', authenticateToken, async (req, res) => {
   }
 });
 
+// Get current check-in status for logged-in user
+app.get('/checkin/current', authenticateToken, async (req, res) => {
+  try {
+    // Get latest check-in that is not rejected
+    const [checkin] = await sql`
+      SELECT *
+      FROM checkins
+      WHERE user_id = ${req.user.id}
+        AND status != 'rejected'
+      ORDER BY created_at DESC
+      LIMIT 1;
+    `;
+
+    if (!checkin) {
+      return res.json({ status: 'none', message: 'No active check-in found' });
+    }
+
+    res.json({
+      status: checkin.status,
+      checkin,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch current check-in' });
+  }
+});
+
+
 
 app.get('/checkin/history', authenticateToken, async (req, res) => {
   try {
