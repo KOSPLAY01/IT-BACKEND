@@ -158,7 +158,7 @@ app.post('/auth/forgot-password', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '15m' });
-    const resetUrl = `http://localhost:5173/reset-password?token=${token}`;
+    const resetUrl = `http://guru-it-azure.vercel.app/reset-password?token=${token}`;
 
     await transporter.sendMail({
       from: `"GURU IT" <${process.env.EMAIL_USER}>`,
